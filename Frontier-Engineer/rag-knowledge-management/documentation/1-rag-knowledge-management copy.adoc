@@ -1,4 +1,4 @@
-= RAG - Knowledge Management (MACOS Local Setup)
+= RAG - Knowledge Management (Local Setup)
 :author: Naresh Chaurasia
 :doctype: book
 :icons: font
@@ -42,7 +42,7 @@ When running locally without Docker, your system runs these processes:
 └──────────┬──────────────┘
            │
            ├───────────────────────┐
-           │                       │
+           │                       │ ⚠️ (Pending)
            ▼                       ▼
 ┌─────────────────────────────┐  ┌─────────────────────────┐
 │ PostgreSQL (local)          │  │ Redis (local on docker) │
@@ -151,6 +151,29 @@ psql -U postgres -d postgres -c "\d langchain_pg_embedding"
 ----
 
 You should see columns: `langchain_id`, `content`, `embedding`, `langchain_metadata`, `category`.
+
+
+----
+langchain_metadata:
+{
+  "page": 5,
+  "title": "Prompting Techniques for Large Language Models",
+  "author": "Naresh Chaurasia",
+  "format": "PDF 1.4",
+  "source": "data/frontier-engineering/week1/010-Prompting-Techniques.pdf",
+  "creator": "Naresh Chaurasia",
+  "modDate": "D:20260618173445+05'00'",
+  "moddate": "2026-06-18T17:34:45+05:00",
+  "subject": "",
+  "trapped": "",
+  "keywords": "",
+  "producer": "Asciidoctor PDF 2.3.24, based on Prawn 2.4.0",
+  "file_path": "data/frontier-engineering/week1/010-Prompting-Techniques.pdf",
+  "total_pages": 22,
+  "creationDate": "D:20260618173445+05'00'",
+  "creationdate": "2026-06-18T17:34:45+05:00"
+}
+----
 
 
 ##############################################
@@ -486,7 +509,7 @@ You should eventually see:
 - The `langchain_pg_embedding` table exists: `psql -U postgres -d postgres -c "\d langchain_pg_embedding"`
 - Your `DATABASE_URL` in `.env` matches your local PostgreSQL credentials
 
-=== Ask Questions
+=== 📍 Ask Questions
 
 In the browser UI, type a question in the text area and click *"Ask"*.
 
@@ -506,14 +529,19 @@ Example questions you can try:
 * "What is the VPN policy for remote employees?"
 * "Tell me about the Q1 2025 announcement"
 
-=== (Optional) Run RAGAS Evaluation
+=== 📍 (Optional) Run RAGAS Evaluation
 
 After ingestion is complete and the app is running:
 
 [source,bash]
 ----
-cd app
-python eval_ragas.py
+# Terminal 1
+cd Frontier-Engineer/rag-knowledge-management
+uvicorn app.api:app --host 0.0.0.0 --port 8000 --reload
+
+# Terminal 2
+cd Frontier-Engineer/rag-knowledge-management
+python -m app.eval_ragas
 ----
 
 This runs the test Q&A pairs from `seed/qna_test.json` and prints evaluation metrics.
@@ -537,6 +565,7 @@ Or, if you also want to remove the HNSW index and recreate everything from scrat
 
 [source,bash]
 ----
+psql -U postgres -d postgres -c "SELECT * FROM langchain_pg_embedding;"
 psql -U postgres -d postgres -c "DROP TABLE IF EXISTS langchain_pg_embedding CASCADE;"
 psql -U postgres -d postgres -f init-db/init.sql
 ----
@@ -657,7 +686,31 @@ Environment configuration file containing:
 | LANGSMITH_PROJECT
 | LangSmith project name (+cka+)
 
+|===
+
+==== 📍 Where LangSmith is Actually Used
+
+LangSmith is **not called directly anywhere in the application code** (`app/api.py`, `app/rag.py`, `app/ingest.py`, `app/utils.py`, `app/eval_ragas.py`) — there is no `import langsmith` or explicit LangSmith SDK call in this project.
+
+It is enabled purely through **environment variables** picked up automatically by LangChain's built-in tracing hook:
+
+[source]
+----
+LANGCHAIN_TRACING_V2 = true
+LANGSMITH_API_KEY=lsv2_pt_...
+LANGSMITH_PROJECT=cka
+----
+
+When `LANGCHAIN_TRACING_V2=true` and a valid `LANGSMITH_API_KEY` are present in the environment, LangChain automatically instruments and ships traces of every chain/LLM/retriever invocation — including the full RAG pipeline built in `app/rag.py`'s `_build_chain()` (retriever → Cohere reranker → `create_stuff_documents_chain` → `create_retrieval_chain`) — to the LangSmith platform under the `cka` project, with **no explicit tracing code required** in any `.py` file.
+
+In short: LangSmith tracing is "wired on" passively via `.env` config; if you want to inspect a given `/ask` call's retrieval + rerank + generation steps, view them in the LangSmith dashboard for project `cka` rather than in the application source code.
+
+IMPORTANT: The `.env` file in this repo contains a live-looking `LANGSMITH_API_KEY` value committed to the project. This should be rotated and moved to a secrets manager rather than kept in a plaintext `.env` file (see the security hardening notes in `documentation/0-enterprise-rag.adoc`).
+
+[cols="1,3", options="header"]
+|===
 | DATA_DIR
+
 | Directory containing source documents (+data+)
 
 | RETRIEVAL_K
@@ -750,12 +803,80 @@ The LLM is instructed to:
 4. **LLM** — OpenAI `gpt-4o-mini` for cost-effective, fast generation.
 5. **Chain** — Uses LangChain's `create_stuff_documents_chain` (stuff all context into prompt) wrapped by `create_retrieval_chain`.
 
-==== Semantic Caching
-- Uses `RedisSemanticCache` with:
-  - Redis URL from `REDIS_URL` env var.
-  - Same embedding model (`text-embedding-3-small`) for cache key generation.
-  - `distance_threshold=0.98` — semantically similar questions (within 0.98 cosine similarity) return cached responses.
-- This reduces API costs and latency for repeated or similar questions.
+==== 📍 When Does Reranking Happen? Is it a Separate API Call?
+
+Yes — Cohere reranking happens **after** vector retrieval but **before** the LLM ever sees the context, and it is a completely separate, external network call to Cohere's servers (distinct from both the OpenAI embeddings call and the OpenAI chat completion call).
+
+*Why it's a distinct API call*
+
+`CohereRerank(top_n=3, model="rerank-multilingual-v3.0")` is a LangChain wrapper around Cohere's own `POST /v1/rerank` REST endpoint. It requires its own API key (`CO_API_KEY`, read from the environment — see the `.env` table above) and talks to Cohere's infrastructure using the `cohere` Python SDK/HTTP client. This is entirely separate from OpenAI, which handles embeddings and answer generation.
+
+In `_build_chain()`, the reranker is wired in via `ContextualCompressionRetriever`:
+
+[source,python]
+----
+base_retriever = store.as_retriever(search_kwargs=search_kwargs)
+
+compressor = CohereRerank(
+    top_n=3,
+    model="rerank-multilingual-v3.0",
+)
+
+retriever = ContextualCompressionRetriever(
+    base_retriever=base_retriever,
+    base_compressor=compressor,
+)
+----
+
+*Step-by-step order of API calls for a single `/ask` request*
+
+1. **OpenAI Embeddings API** — the user's question is embedded (`text-embedding-3-small`) so it can be compared against stored vectors.
+2. **pgvector similarity search** — `base_retriever` queries PostgreSQL/pgvector and returns the top `k` (default 5) most similar chunks. No LLM/reranker call is involved here — it's pure vector math inside Postgres.
+3. **Cohere Rerank API** — `ContextualCompressionRetriever` calls `compressor.compress_documents(documents, query)`, which sends the question text plus the 5 candidate chunks to Cohere's rerank model. Cohere scores each chunk's relevance to the actual question and returns them reordered; LangChain keeps only the top 3 (`top_n=3`).
+4. **OpenAI Chat Completion API** — only after reranking completes does `create_stuff_documents_chain` insert the reranked top-3 chunks into the `PROMPT` and call `gpt-4o-mini` to generate the final answer.
+
+So the full sequence is:
+
+[source]
+----
+User Question
+   ↓
+OpenAI Embedding API (embed the question)
+   ↓
+pgvector similarity search (k=5 candidates from Postgres)
+   ↓
+Cohere Rerank API (separate external call → top_n=3)
+   ↓
+Prompt assembly (stuff top-3 chunks into PROMPT)
+   ↓
+OpenAI Chat Completion API (gpt-4o-mini generates the answer)
+   ↓
+Final Answer
+----
+
+**Key takeaway:** Reranking is *not* a manual step you'd find as separate code elsewhere in `rag.py` — it's encapsulated inside the single `retriever` object (`ContextualCompressionRetriever`) that `create_retrieval_chain` invokes. That one `retriever.invoke()` call internally performs both the vector search step and the Cohere rerank network call, in that order, before the doc chain ever runs the LLM. A single `/ask` request therefore triggers three distinct external API round-trips in sequence: OpenAI (embeddings) → Cohere (rerank) → OpenAI (chat completion).
+
+==== Semantic Caching (DISABLED)
+- `RedisSemanticCache` was previously used to cache LLM responses based on
+  embedding similarity between questions, with `distance_threshold=0.98`.
+- **Bug found:** a `distance_threshold` of `0.98` is far too permissive.
+  In practice this caused **completely unrelated questions** (e.g. a PTO
+  question and a travel-policy question) to be treated as "similar enough,"
+  so the cache incorrectly returned a previously cached answer for a
+  different question entirely — silently giving users the wrong answer.
+- **Fix:** semantic caching has been **disabled** in `app/rag.py` via
+  `set_llm_cache(None)`. The `RedisSemanticCache` import/setup was removed.
+  Every `/ask` call now always generates a fresh answer from the LLM using
+  the freshly retrieved context, eliminating the risk of stale/incorrect
+  cached answers.
+- Redis is therefore **no longer required** for the app to function
+  correctly. It was previously used only for this semantic cache.
+- If semantic caching is reintroduced in the future, use a much stricter
+  `distance_threshold` (e.g. `0.05`–`0.15`, since `langchain-redis` treats
+  this value as a *distance* where lower = stricter/more-similar match
+  required) and thoroughly test with dissimilar questions before relying
+  on it in production.
+
 
 ==== `answer_with_docs_async()`
 - Builds the chain, invokes it asynchronously with the user's question.
@@ -833,6 +954,34 @@ CREATE TABLE IF NOT EXISTS langchain_pg_embedding (
   - `embedding` — 1536-dimensional vector (OpenAI `text-embedding-3-small` dimension).
   - `langchain_metadata` — JSONB for flexible metadata.
   - `category` — Direct column (also indexed via metadata_columns in LangChain).
+
+==== What is `langchain_metadata` Used For?
+
+`langchain_metadata` is a `jsonb` column in the `langchain_pg_embedding` table that stores **arbitrary, flexible per-chunk metadata as JSON**, separate from the actual embedding vector and raw text content columns.
+
+*Where it's defined*
+
+- `init-db/init.sql`: `langchain_metadata jsonb` — declared as a JSONB column in the table schema.
+- `app/utils.py` (`get_vector_store()`): passes `metadata_json_column="langchain_metadata"` to `AsyncPGVectorStore.create()`, telling LangChain which column to use for reading/writing metadata.
+
+*What goes into it*
+
+During ingestion (`app/ingest.py`), every `Document` object loaded from a file (PDF/MD/DOCX/TXT) carries a `.metadata` dict. For example:
+
+[source,python]
+----
+d.metadata["category"] = category   # e.g. "guides", "policies"
+----
+
+Document loaders such as `PyMuPDFLoader` also automatically attach fields like `source` (the file path) and page numbers. When `store.aadd_documents(chunks)` runs during ingestion, LangChain serializes each chunk's entire `.metadata` dict into JSON and writes it into the `langchain_metadata` column — one JSON blob per row/chunk.
+
+*Why it's useful*
+
+1. **Flexible schema** — new metadata fields (source, page, author, date, etc.) can be added without altering the table schema, since it's just JSON.
+2. **Citations/traceability** — in `app/rag.py`'s `answer_with_docs_async()`, each retrieved document's `d.metadata.get("source")` is read to build the `sources` list returned to the user, so they can see which file(s) an answer came from. This value comes straight out of the `langchain_metadata` JSON blob.
+3. **Filtered search support** — `metadata_columns=["category"]` in `utils.py` promotes the `category` key specifically out of the JSON blob into its own indexed `category` SQL column (separate from `langchain_metadata`), enabling fast `WHERE category = 'guides'` filtering during vector search (see `_build_chain()`'s `search_kwargs["filter"] = {"category": category}`).
+
+**Summary:** `langchain_metadata` is the general-purpose JSON "extra info" bucket for each embedded chunk (source file, page, etc.), while frequently-filtered fields like `category` are additionally promoted to their own real column for efficient querying — both are populated automatically by LangChain's vector store during ingestion.
 
 === `seed/qna_test.json`
 
@@ -1119,7 +1268,8 @@ The project requires these Python packages (should be in `requirements.txt`):
 
 4. **Reranking** — Using Cohere's reranker after initial vector retrieval improves precision by re-ranking the top-k results, ensuring only the most relevant contexts are fed to the LLM.
 
-5. **Semantic caching** — Redis Semantic Cache avoids redundant LLM calls for semantically similar questions, reducing both cost and latency.
+5. **Semantic caching (DISABLED)** — Redis Semantic Cache was originally added to avoid redundant LLM calls for semantically similar questions. However, a `distance_threshold=0.98` proved far too permissive and caused unrelated questions (e.g. PTO vs. travel policy) to incorrectly return each other's cached answers. Semantic caching has since been **disabled** (`set_llm_cache(None)` in `app/rag.py`) so every question is always answered fresh — correctness was prioritized over caching performance.
+
 
 6. **Category-based retrieval** — The `/ask` endpoint currently hard-codes `category="guides"`, demonstrating filtered search. This can be parameterized for production use.
 

@@ -1,4 +1,4 @@
-= RAG - Knowledge Management (MACOS Local Setup)
+= RAG - Knowledge Management (Local Setup)
 :author: Naresh Chaurasia
 :doctype: book
 :icons: font
@@ -13,18 +13,23 @@
 
 == Overview
 
-This guide explains how to run the *Company Knowledge Assistant* RAG application *without Docker* — directly on your macOS machine with locally installed PostgreSQL, Redis, and Python.
+This guide explains how to run the *Company Knowledge Assistant* RAG application *without Docker* — directly on your local machine with locally installed PostgreSQL, Redis, and Python.
+
+NOTE: This guide includes commands for both *macOS* (using Homebrew) and *Windows* (using PowerShell / winget / installers). Each command block is labeled and commented to indicate which OS it applies to. If a command works the same way on both platforms (e.g. `psql`, `curl`, `pip`), it is shown once without an OS-specific label.
 
 == Prerequisites
 
 Before starting, ensure you have the following installed on your machine:
 
-* *Homebrew* (macOS package manager) — https://brew.sh
-* *Python 3.11+* — Check with `python3 --version`
+* *Homebrew* (macOS package manager) — https://brew.sh +
+  *Windows equivalent:* https://chocolatey.org[Chocolatey] or https://learn.microsoft.com/en-us/windows/package-manager/winget/[winget] (built into Windows 10/11)
+* *Python 3.11+* — Check with `python3 --version` (macOS) or `python --version` (Windows)
 * *PostgreSQL 17* (with pgvector extension)
-* *Redis*
+* *Redis* (native on macOS via Homebrew; on Windows, Redis is typically run via Docker or WSL — see notes below)
 * An *OpenAI API key* (with access to `text-embedding-3-small` and `gpt-4o-mini`)
 * (Optional) A *Cohere API key* for reranking
+* *(Windows only)* https://gitforwindows.org[Git Bash] or *WSL2 (Windows Subsystem for Linux)* is recommended for a smoother experience, since many `brew`-based steps have simpler equivalents on Linux/WSL than native PowerShell.
+
 
 ##############################################
 
@@ -42,7 +47,7 @@ When running locally without Docker, your system runs these processes:
 └──────────┬──────────────┘
            │
            ├───────────────────────┐
-           │                       │
+           │                       │ ⚠️ (Pending)
            ▼                       ▼
 ┌─────────────────────────────┐  ┌─────────────────────────┐
 │ PostgreSQL (local)          │  │ Redis (local on docker) │
@@ -61,9 +66,9 @@ When running locally without Docker, your system runs these processes:
 
 Open a terminal and run:
 
+// macOS / Linux (bash/zsh)
 [source,bash]
 ----
-
 # All environments will be created in this directory:
 cd /Users/nareshchaurasia/nc/PYTHON-ARCHITECT/Python-Immersive-AI/ALL-VENV
 
@@ -75,7 +80,37 @@ source .venv_knowledge_management/bin/activate
 cd /Users/nareshchaurasia/nc/PYTHON-ARCHITECT/Python-Immersive-AI/Frontier-Engineer/week2/e2e-projects/rag-knowledge-management
 ----
 
-Your prompt should now show `(venv_knowledge_management)` indicating the virtual environment is active.
+// Windows (PowerShell)
+[source,powershell]
+----
+# All environments will be created in this directory:
+cd C:\Users\<YourUsername>\PYTHON-ARCHITECT\Python-Immersive-AI\ALL-VENV
+
+python -m venv .venv_knowledge_management
+
+.venv_knowledge_management\Scripts\Activate.ps1
+
+# If PowerShell blocks script execution, run this once (as Administrator) then retry:
+# Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+
+# Change to the project directory
+cd C:\Users\<YourUsername>\PYTHON-ARCHITECT\Python-Immersive-AI\Frontier-Engineer\week2\e2e-projects\rag-knowledge-management
+----
+
+// Windows (Command Prompt / cmd.exe)
+[source,batch]
+----
+cd C:\Users\<YourUsername>\PYTHON-ARCHITECT\Python-Immersive-AI\ALL-VENV
+
+python -m venv .venv_knowledge_management
+
+.venv_knowledge_management\Scripts\activate.bat
+
+cd C:\Users\<YourUsername>\PYTHON-ARCHITECT\Python-Immersive-AI\Frontier-Engineer\week2\e2e-projects\rag-knowledge-management
+----
+
+Your prompt should now show `(venv_knowledge_management)` indicating the virtual environment is active (on both macOS and Windows).
+
 
 ##############################################
 
@@ -83,7 +118,7 @@ Your prompt should now show `(venv_knowledge_management)` indicating the virtual
 
 === Install PostgreSQL 18 with pgvector
 
-
+// macOS (Homebrew)
 [source,bash]
 ----
 # Install PostgreSQL 18
@@ -106,12 +141,41 @@ pg_isready
 Expected output: `/tmp/.s.PGSQL.5432 - accepting connections`
 ----
 
+// Windows (PowerShell)
+[source,powershell]
+----
+# Option 1: Install via winget (recommended)
+winget install -e --id PostgreSQL.PostgreSQL.16
+
+# Option 2: Install via Chocolatey (if you use Chocolatey instead of winget)
+choco install postgresql16 --params '/Password:postgres'
+
+# The Windows installer (EDB) starts the "postgresql-x64-16" service automatically.
+# To start/stop it manually via PowerShell (run as Administrator):
+Start-Service postgresql-x64-16
+Stop-Service postgresql-x64-16
+
+# pgvector on Windows: the official Windows installer does NOT bundle pgvector.
+# Easiest options:
+#   1. Use WSL2 + Ubuntu and follow the macOS/Linux (apt) steps instead, OR
+#   2. Build pgvector from source using Visual Studio Build Tools:
+#      https://github.com/pgvector/pgvector#windows
+#   3. Or simply run Postgres+pgvector via Docker:
+#      docker run -d --name pg-vector -e POSTGRES_PASSWORD=postgres -p 5432:5432 pgvector/pgvector:pg17
+
+# Verify PostgreSQL is running
+pg_isready
+# Expected output: /tmp/.s.PGSQL.5432 - accepting connections  (or 127.0.0.1:5432 on Windows)
+----
+
+
 ##############################################
 
 ---
 
 === Create the Database and Enable pgvector
 
+// macOS / Linux
 [source,bash]
 ----
 # Connect to PostgreSQL as the default user (your macOS username)
@@ -122,13 +186,33 @@ CREATE EXTENSION IF NOT EXISTS vector;
 \q
 ----
 
+// Windows (PowerShell / cmd — psql behaves identically once installed & on PATH)
+[source,powershell]
+----
+# Connect to PostgreSQL as the "postgres" superuser created by the installer
+psql -U postgres -d postgres
+
+# Inside the psql shell, run these commands one by one:
+CREATE EXTENSION IF NOT EXISTS vector;
+\q
+----
+
 *NOTE:* If your macOS username is different from `postgres`, you may need to create the `postgres` user or update the connection string later. Run this if needed:
 
+// macOS / Linux
 [source,bash]
 ----
 createuser -s postgres
 psql -d postgres -c "\du"
 ----
+
+// Windows (PowerShell) — createuser.exe ships alongside psql.exe in the Postgres bin folder
+[source,powershell]
+----
+createuser -U postgres -s postgres
+psql -U postgres -d postgres -c "\du"
+----
+
 
 ##############################################
 
@@ -136,6 +220,7 @@ psql -d postgres -c "\du"
 
 === Initialize the Database Table
 
+// macOS / Linux / Windows (psql commands are identical everywhere once psql.exe is on PATH)
 [source,bash]
 ----
 psql -U postgres -d postgres -f init-db/init.sql
@@ -150,7 +235,39 @@ Verify the table was created:
 psql -U postgres -d postgres -c "\d langchain_pg_embedding"
 ----
 
+// Windows (PowerShell) — use forward slashes or backslashes, both work in psql's -f argument
+[source,powershell]
+----
+psql -U postgres -d postgres -f init-db\init.sql
+
+psql -U postgres -d postgres -c "\d langchain_pg_embedding"
+----
+
+
 You should see columns: `langchain_id`, `content`, `embedding`, `langchain_metadata`, `category`.
+
+
+----
+langchain_metadata:
+{
+  "page": 5,
+  "title": "Prompting Techniques for Large Language Models",
+  "author": "Naresh Chaurasia",
+  "format": "PDF 1.4",
+  "source": "data/frontier-engineering/week1/010-Prompting-Techniques.pdf",
+  "creator": "Naresh Chaurasia",
+  "modDate": "D:20260618173445+05'00'",
+  "moddate": "2026-06-18T17:34:45+05:00",
+  "subject": "",
+  "trapped": "",
+  "keywords": "",
+  "producer": "Asciidoctor PDF 2.3.24, based on Prawn 2.4.0",
+  "file_path": "data/frontier-engineering/week1/010-Prompting-Techniques.pdf",
+  "total_pages": 22,
+  "creationDate": "D:20260618173445+05'00'",
+  "creationdate": "2026-06-18T17:34:45+05:00"
+}
+----
 
 
 ##############################################
@@ -159,6 +276,7 @@ You should see columns: `langchain_id`, `content`, `embedding`, `langchain_metad
 
 === Set a Password
 
+// Works identically on macOS, Linux and Windows (run inside the psql shell)
 [source,sql]
 ----
 ALTER USER nareshchaurasia
@@ -178,15 +296,23 @@ DATABASE_URL=postgresql+asyncpg://nareshchaurasia:Hello12#$@localhost:5432/postg
 
 === View Logs
 
+// macOS (Homebrew)
 [source,bash]
 ----
 tail -50 /opt/homebrew/var/postgresql@17/server.log
+----
+
+// Windows (PowerShell) — default EDB installer log location
+[source,powershell]
+----
+Get-Content "C:\Program Files\PostgreSQL\16\data\log\postgresql-*.log" -Tail 50 -Wait
 ----
 
 === Disable Automatic Startup
 
 If you don't want PostgreSQL to start automatically at login:
 
+// macOS (Homebrew)
 [source,bash]
 ----
 brew services stop postgresql@17
@@ -200,8 +326,18 @@ launchctl bootout gui/$(id -u) \
 rm ~/Library/LaunchAgents/homebrew.mxcl.postgresql@17.plist
 ----
 
+// Windows (PowerShell, run as Administrator) — disable the Windows service from auto-starting
+[source,powershell]
+----
+Set-Service -Name postgresql-x64-16 -StartupType Manual
+
+# To fully stop it right now as well:
+Stop-Service postgresql-x64-16
+----
+
 === Uninstall PostgreSQL
 
+// macOS (Homebrew)
 [source,bash]
 ----
 brew services stop postgresql@17
@@ -209,6 +345,17 @@ brew uninstall postgresql@17
 rm -rf /opt/homebrew/var/postgresql@17
 brew cleanup
 ----
+
+// Windows (PowerShell, run as Administrator) — via winget, or use "Add/Remove Programs"
+[source,powershell]
+----
+Stop-Service postgresql-x64-16
+winget uninstall -e --id PostgreSQL.PostgreSQL.16
+
+# Optionally remove leftover data directory (WARNING: deletes all databases)
+Remove-Item -Recurse -Force "C:\Program Files\PostgreSQL\16\data"
+----
+
 
 ##############################################
 
@@ -239,6 +386,7 @@ psql -U postgres -d postgres -c "\di langchain_pg_embedding_hnsw_idx"
 
 === Useful Commands
 
+// macOS (Homebrew)
 [source,bash]
 ----
 psql --version
@@ -252,12 +400,27 @@ psql -U postgres -d postgres -c "\d langchain_pg_embedding"
 psql -U postgres -d postgres -c "\di"
 ----
 
+// Windows (PowerShell)
+[source,powershell]
+----
+psql --version
+Get-Service postgresql*
+pg_isready
+psql -U postgres -d postgres
+Start-Service postgresql-x64-16
+Stop-Service postgresql-x64-16
+Get-Content "C:\Program Files\PostgreSQL\16\data\log\postgresql-*.log" -Tail 50
+psql -U postgres -d postgres -c "\d langchain_pg_embedding"
+psql -U postgres -d postgres -c "\di"
+----
+
 ##############################################
 
 ---
 
 === Install Redis (for Semantic Caching)
 
+// macOS (Homebrew)
 [source,bash]
 ----
 # Install Redis
@@ -270,7 +433,28 @@ brew services start redis
 redis-cli ping
 ----
 
+// Windows — Redis does not officially support native Windows installs anymore.
+// Recommended options, in order of ease:
+[source,powershell]
+----
+# Option 1 (recommended): Run Redis via Docker Desktop
+docker run -d --name redis -p 6379:6379 redis:latest
+
+# Option 2: Use WSL2 (Windows Subsystem for Linux) and install Redis via apt inside WSL:
+#   wsl --install                      (one-time, if WSL isn't set up yet)
+#   sudo apt update && sudo apt install redis-server
+#   sudo service redis-server start
+
+# Option 3: Use the unofficial Memurai (Redis-compatible) Windows build:
+#   winget install -e --id Memurai.MemuraiDeveloper
+
+# Verify Redis is running (works the same regardless of which option above you used,
+# as long as redis-cli.exe is on PATH or you run it from inside the container/WSL)
+redis-cli ping
+----
+
 Expected output: `PONG`
+
 
 === Update the .env File
 
@@ -290,6 +474,13 @@ DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/postgres
 DATABASE_URL=postgresql+asyncpg://YOUR_MACOS_USERNAME@localhost:5432/postgres
 ----
 
+*(Windows) Same DATABASE_URL format applies:*
+
+[source]
+----
+DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/postgres
+----
+
 2. Replace the `REDIS_URL` value to point to localhost:
 
 [source]
@@ -297,7 +488,11 @@ DATABASE_URL=postgresql+asyncpg://YOUR_MACOS_USERNAME@localhost:5432/postgres
 REDIS_URL=redis://localhost:6379/0
 ----
 
+// This value is identical on macOS and Windows since it just points at whatever
+// Redis (Docker/WSL/Memurai/brew) is listening on localhost:6379.
+
 3. Update the `OPENAI_API_KEY` with your own key:
+
 
 [source]
 ----
@@ -327,7 +522,15 @@ Create a `requirements.txt` file in the project root (`Frontier-Engineer/week2/e
 
 Then install all dependencies:
 
+// macOS / Linux / Windows — pip commands are identical once the venv is activated
 [source,bash]
+----
+pip install --upgrade pip
+pip install -r venv_knowledge_management_requirements.txt
+----
+
+// Windows (PowerShell) equivalent, shown for clarity (same commands, just run inside PowerShell)
+[source,powershell]
 ----
 pip install --upgrade pip
 pip install -r venv_knowledge_management_requirements.txt
@@ -337,12 +540,27 @@ pip install -r venv_knowledge_management_requirements.txt
 
 NOTE: If you encounter issues with `unstructured` or `pymupdf`, try installing missing system libraries:
 
+// macOS (Homebrew)
 [source,bash]
 ----
 brew install poppler tesseract libffi
 ----
 
+// Windows (Chocolatey / winget / manual installers)
+[source,powershell]
+----
+# Option 1: Chocolatey
+choco install poppler tesseract libffi -y
+
+# Option 2: winget (tesseract has an official package; poppler/libffi may need manual install)
+winget install -e --id UB-Mannheim.TesseractOCR
+
+# Option 3 (recommended if the above fail): use WSL2 + apt, same as Linux:
+#   sudo apt update && sudo apt install poppler-utils tesseract-ocr libffi-dev
+----
+
 Then retry: `pip install -r requirements.txt`
+
 
 ##############################################
 
@@ -357,6 +575,7 @@ The project uses these import paths — make sure they match what's installed:
 
 If you get `ModuleNotFoundError` for `langchain_classic`, run:
 
+// Same command on macOS, Linux and Windows (inside the activated venv)
 [source,bash]
 ----
 pip show langchain-classic
@@ -366,11 +585,21 @@ If not installed, install it: `pip install langchain-classic`
 
 === Run the Application
 
-Make sure your virtual environment is still active (`source .venv_knowledge_management/bin/activate` if not).
+Make sure your virtual environment is still active.
 
+// macOS / Linux
 [source,bash]
 ----
+source .venv_knowledge_management/bin/activate
 cd Frontier-Engineer/week2/e2e-projects/rag-knowledge-management
+uvicorn app.api:app --host 0.0.0.0 --port 8000 --reload
+----
+
+// Windows (PowerShell)
+[source,powershell]
+----
+.venv_knowledge_management\Scripts\Activate.ps1
+cd Frontier-Engineer\week2\e2e-projects\rag-knowledge-management
 uvicorn app.api:app --host 0.0.0.0 --port 8000 --reload
 ----
 
@@ -391,9 +620,22 @@ To stop the uvicorn server, press __`Ctrl+C`__ in the terminal where it's runnin
 
 If you need to kill it from another terminal (if the process is running in the background), use:
 
+// macOS / Linux
 ```bash
 # Find the process on port 8000 and kill it
 lsof -ti:8000 | xargs kill -9
+```
+
+// Windows (PowerShell) — find and kill the process listening on port 8000
+```powershell
+# Find the PID listening on port 8000
+Get-NetTCPConnection -LocalPort 8000 | Select-Object -Property OwningProcess
+
+# Kill it (replace <PID> with the value from above)
+Stop-Process -Id <PID> -Force
+
+# One-liner combining both steps:
+Stop-Process -Id (Get-NetTCPConnection -LocalPort 8000).OwningProcess -Force
 ```
 
 
@@ -403,9 +645,16 @@ __1. If the terminal is in the foreground__ — Press `Ctrl+C` in the terminal w
 
 __2. If running in the background or from another terminal__ — Kill the process on port 8000:
 
+// macOS / Linux
 ```bash
 lsof -ti:8000 | xargs kill -9
 ```
+
+// Windows (PowerShell)
+```powershell
+Stop-Process -Id (Get-NetTCPConnection -LocalPort 8000).OwningProcess -Force
+```
+
 
 __3. To stop all related services__ (PostgreSQL, Redis Stack, and the app):
 
@@ -461,17 +710,38 @@ In the browser UI, click the *"Ingest Data"* button.
 
 Or use curl from the terminal:
 
+// macOS / Linux — curl is preinstalled
 [source,bash]
 ----
 curl -X POST http://localhost:8000/ingest
 ----
 
+// Windows (PowerShell) — curl.exe is built into Windows 10/11; or use Invoke-RestMethod
+[source,powershell]
+----
+curl.exe -X POST http://localhost:8000/ingest
+
+# Native PowerShell alternative:
+Invoke-RestMethod -Method POST -Uri http://localhost:8000/ingest
+----
+
 Check the ingestion status:
 
+// macOS / Linux
 [source,bash]
 ----
 curl http://localhost:8000/ingest/status
 ----
+
+// Windows (PowerShell)
+[source,powershell]
+----
+curl.exe http://localhost:8000/ingest/status
+
+# Native PowerShell alternative:
+Invoke-RestMethod -Uri http://localhost:8000/ingest/status
+----
+
 
 You should eventually see:
 
@@ -486,18 +756,33 @@ You should eventually see:
 - The `langchain_pg_embedding` table exists: `psql -U postgres -d postgres -c "\d langchain_pg_embedding"`
 - Your `DATABASE_URL` in `.env` matches your local PostgreSQL credentials
 
-=== Ask Questions
+=== 📍 Ask Questions
 
 In the browser UI, type a question in the text area and click *"Ask"*.
 
 Or use curl:
 
+// macOS / Linux
 [source,bash]
 ----
 curl -X POST http://localhost:8000/ask \
   -H "Content-Type: application/json" \
   -d '{"question": "What is the company policy on remote work?"}'
 ----
+
+// Windows (PowerShell) — curl.exe requires escaped double quotes; Invoke-RestMethod is cleaner
+[source,powershell]
+----
+curl.exe -X POST http://localhost:8000/ask `
+  -H "Content-Type: application/json" `
+  -d '{\"question\": \"What is the company policy on remote work?\"}'
+
+# Native PowerShell alternative (recommended — no quote-escaping headaches):
+Invoke-RestMethod -Method POST -Uri http://localhost:8000/ask `
+  -ContentType "application/json" `
+  -Body (@{ question = "What is the company policy on remote work?" } | ConvertTo-Json)
+----
+
 
 Example questions you can try:
 
@@ -506,14 +791,32 @@ Example questions you can try:
 * "What is the VPN policy for remote employees?"
 * "Tell me about the Q1 2025 announcement"
 
-=== (Optional) Run RAGAS Evaluation
+=== 📍 (Optional) Run RAGAS Evaluation
 
 After ingestion is complete and the app is running:
 
+// macOS / Linux
 [source,bash]
 ----
-cd app
-python eval_ragas.py
+# Terminal 1
+cd Frontier-Engineer/rag-knowledge-management
+uvicorn app.api:app --host 0.0.0.0 --port 8000 --reload
+
+# Terminal 2
+cd Frontier-Engineer/rag-knowledge-management
+python -m app.eval_ragas
+----
+
+// Windows (PowerShell)
+[source,powershell]
+----
+# Terminal 1
+cd Frontier-Engineer\rag-knowledge-management
+uvicorn app.api:app --host 0.0.0.0 --port 8000 --reload
+
+# Terminal 2
+cd Frontier-Engineer\rag-knowledge-management
+python -m app.eval_ragas
 ----
 
 This runs the test Q&A pairs from `seed/qna_test.json` and prints evaluation metrics.
@@ -528,6 +831,7 @@ This runs the test Q&A pairs from `seed/qna_test.json` and prints evaluation met
 
 Delete existing data from the `langchain_pg_embedding` table (which stores all document chunks, embeddings, and metadata). Connect to PostgreSQL and run:
 
+// macOS / Linux / Windows — psql syntax is identical everywhere
 [source,bash]
 ----
 psql -U postgres -d postgres -c "TRUNCATE TABLE langchain_pg_embedding;"
@@ -535,11 +839,20 @@ psql -U postgres -d postgres -c "TRUNCATE TABLE langchain_pg_embedding;"
 
 Or, if you also want to remove the HNSW index and recreate everything from scratch:
 
+// macOS / Linux
 [source,bash]
 ----
 psql -U postgres -d postgres -c "SELECT * FROM langchain_pg_embedding;"
 psql -U postgres -d postgres -c "DROP TABLE IF EXISTS langchain_pg_embedding CASCADE;"
 psql -U postgres -d postgres -f init-db/init.sql
+----
+
+// Windows (PowerShell) — same commands, backslash path for -f
+[source,powershell]
+----
+psql -U postgres -d postgres -c "SELECT * FROM langchain_pg_embedding;"
+psql -U postgres -d postgres -c "DROP TABLE IF EXISTS langchain_pg_embedding CASCADE;"
+psql -U postgres -d postgres -f init-db\init.sql
 ----
 
 The `TRUNCATE` approach is faster — it clears all rows but keeps the table structure and indexes intact.
@@ -548,6 +861,7 @@ The `TRUNCATE` approach is faster — it clears all rows but keeps the table str
 
 If you want to also clear cached LLM responses from the semantic cache:
 
+// macOS / Linux / Windows — redis-cli syntax is identical (Windows via Docker/WSL/Memurai)
 [source,bash]
 ----
 redis-cli FLUSHDB
@@ -557,23 +871,46 @@ redis-cli FLUSHDB
 
 Start the app (if not already running):
 
+// macOS / Linux
 [source,bash]
+----
+uvicorn app.api:app --host 0.0.0.0 --port 8000 --reload
+----
+
+// Windows (PowerShell) — identical command, just run from the activated venv
+[source,powershell]
 ----
 uvicorn app.api:app --host 0.0.0.0 --port 8000 --reload
 ----
 
 Then trigger ingestion:
 
+// macOS / Linux
 [source,bash]
 ----
 curl -X POST http://localhost:8000/ingest
 ----
 
+// Windows (PowerShell)
+[source,powershell]
+----
+curl.exe -X POST http://localhost:8000/ingest
+# or: Invoke-RestMethod -Method POST -Uri http://localhost:8000/ingest
+----
+
 Monitor the status:
 
+// macOS / Linux
 [source,bash]
 ----
 curl http://localhost:8000/ingest/status
+----
+
+// Windows (PowerShell)
+[source,powershell]
+----
+curl.exe http://localhost:8000/ingest/status
+# or: Invoke-RestMethod -Uri http://localhost:8000/ingest/status
 ----
 
 Wait until you see `"status":"succeeded"` with document/chunk counts.
@@ -582,12 +919,14 @@ Wait until you see `"status":"succeeded"` with document/chunk counts.
 
 Check that the table has data:
 
+// macOS / Linux / Windows — identical psql command
 [source,bash]
 ----
 psql -U postgres -d postgres -c "SELECT COUNT(*) FROM langchain_pg_embedding;"
 ----
 
 You should see the chunk count (e.g., ~300 rows).
+
 
 
 ##############################################
@@ -658,7 +997,31 @@ Environment configuration file containing:
 | LANGSMITH_PROJECT
 | LangSmith project name (+cka+)
 
+|===
+
+==== 📍 Where LangSmith is Actually Used
+
+LangSmith is **not called directly anywhere in the application code** (`app/api.py`, `app/rag.py`, `app/ingest.py`, `app/utils.py`, `app/eval_ragas.py`) — there is no `import langsmith` or explicit LangSmith SDK call in this project.
+
+It is enabled purely through **environment variables** picked up automatically by LangChain's built-in tracing hook:
+
+[source]
+----
+LANGCHAIN_TRACING_V2 = true
+LANGSMITH_API_KEY=lsv2_pt_...
+LANGSMITH_PROJECT=cka
+----
+
+When `LANGCHAIN_TRACING_V2=true` and a valid `LANGSMITH_API_KEY` are present in the environment, LangChain automatically instruments and ships traces of every chain/LLM/retriever invocation — including the full RAG pipeline built in `app/rag.py`'s `_build_chain()` (retriever → Cohere reranker → `create_stuff_documents_chain` → `create_retrieval_chain`) — to the LangSmith platform under the `cka` project, with **no explicit tracing code required** in any `.py` file.
+
+In short: LangSmith tracing is "wired on" passively via `.env` config; if you want to inspect a given `/ask` call's retrieval + rerank + generation steps, view them in the LangSmith dashboard for project `cka` rather than in the application source code.
+
+IMPORTANT: The `.env` file in this repo contains a live-looking `LANGSMITH_API_KEY` value committed to the project. This should be rotated and moved to a secrets manager rather than kept in a plaintext `.env` file (see the security hardening notes in `documentation/0-enterprise-rag.adoc`).
+
+[cols="1,3", options="header"]
+|===
 | DATA_DIR
+
 | Directory containing source documents (+data+)
 
 | RETRIEVAL_K
@@ -750,6 +1113,59 @@ The LLM is instructed to:
 3. **Reranker** — Uses Cohere `rerank-multilingual-v3.0` to reorder the 5 retrieved chunks, keeping the top 3 (`top_n=3`). This improves retrieval precision.
 4. **LLM** — OpenAI `gpt-4o-mini` for cost-effective, fast generation.
 5. **Chain** — Uses LangChain's `create_stuff_documents_chain` (stuff all context into prompt) wrapped by `create_retrieval_chain`.
+
+==== 📍 When Does Reranking Happen? Is it a Separate API Call?
+
+Yes — Cohere reranking happens **after** vector retrieval but **before** the LLM ever sees the context, and it is a completely separate, external network call to Cohere's servers (distinct from both the OpenAI embeddings call and the OpenAI chat completion call).
+
+*Why it's a distinct API call*
+
+`CohereRerank(top_n=3, model="rerank-multilingual-v3.0")` is a LangChain wrapper around Cohere's own `POST /v1/rerank` REST endpoint. It requires its own API key (`CO_API_KEY`, read from the environment — see the `.env` table above) and talks to Cohere's infrastructure using the `cohere` Python SDK/HTTP client. This is entirely separate from OpenAI, which handles embeddings and answer generation.
+
+In `_build_chain()`, the reranker is wired in via `ContextualCompressionRetriever`:
+
+[source,python]
+----
+base_retriever = store.as_retriever(search_kwargs=search_kwargs)
+
+compressor = CohereRerank(
+    top_n=3,
+    model="rerank-multilingual-v3.0",
+)
+
+retriever = ContextualCompressionRetriever(
+    base_retriever=base_retriever,
+    base_compressor=compressor,
+)
+----
+
+*Step-by-step order of API calls for a single `/ask` request*
+
+1. **OpenAI Embeddings API** — the user's question is embedded (`text-embedding-3-small`) so it can be compared against stored vectors.
+2. **pgvector similarity search** — `base_retriever` queries PostgreSQL/pgvector and returns the top `k` (default 5) most similar chunks. No LLM/reranker call is involved here — it's pure vector math inside Postgres.
+3. **Cohere Rerank API** — `ContextualCompressionRetriever` calls `compressor.compress_documents(documents, query)`, which sends the question text plus the 5 candidate chunks to Cohere's rerank model. Cohere scores each chunk's relevance to the actual question and returns them reordered; LangChain keeps only the top 3 (`top_n=3`).
+4. **OpenAI Chat Completion API** — only after reranking completes does `create_stuff_documents_chain` insert the reranked top-3 chunks into the `PROMPT` and call `gpt-4o-mini` to generate the final answer.
+
+So the full sequence is:
+
+[source]
+----
+User Question
+   ↓
+OpenAI Embedding API (embed the question)
+   ↓
+pgvector similarity search (k=5 candidates from Postgres)
+   ↓
+Cohere Rerank API (separate external call → top_n=3)
+   ↓
+Prompt assembly (stuff top-3 chunks into PROMPT)
+   ↓
+OpenAI Chat Completion API (gpt-4o-mini generates the answer)
+   ↓
+Final Answer
+----
+
+**Key takeaway:** Reranking is *not* a manual step you'd find as separate code elsewhere in `rag.py` — it's encapsulated inside the single `retriever` object (`ContextualCompressionRetriever`) that `create_retrieval_chain` invokes. That one `retriever.invoke()` call internally performs both the vector search step and the Cohere rerank network call, in that order, before the doc chain ever runs the LLM. A single `/ask` request therefore triggers three distinct external API round-trips in sequence: OpenAI (embeddings) → Cohere (rerank) → OpenAI (chat completion).
 
 ==== Semantic Caching (DISABLED)
 - `RedisSemanticCache` was previously used to cache LLM responses based on
@@ -850,6 +1266,34 @@ CREATE TABLE IF NOT EXISTS langchain_pg_embedding (
   - `langchain_metadata` — JSONB for flexible metadata.
   - `category` — Direct column (also indexed via metadata_columns in LangChain).
 
+==== What is `langchain_metadata` Used For?
+
+`langchain_metadata` is a `jsonb` column in the `langchain_pg_embedding` table that stores **arbitrary, flexible per-chunk metadata as JSON**, separate from the actual embedding vector and raw text content columns.
+
+*Where it's defined*
+
+- `init-db/init.sql`: `langchain_metadata jsonb` — declared as a JSONB column in the table schema.
+- `app/utils.py` (`get_vector_store()`): passes `metadata_json_column="langchain_metadata"` to `AsyncPGVectorStore.create()`, telling LangChain which column to use for reading/writing metadata.
+
+*What goes into it*
+
+During ingestion (`app/ingest.py`), every `Document` object loaded from a file (PDF/MD/DOCX/TXT) carries a `.metadata` dict. For example:
+
+[source,python]
+----
+d.metadata["category"] = category   # e.g. "guides", "policies"
+----
+
+Document loaders such as `PyMuPDFLoader` also automatically attach fields like `source` (the file path) and page numbers. When `store.aadd_documents(chunks)` runs during ingestion, LangChain serializes each chunk's entire `.metadata` dict into JSON and writes it into the `langchain_metadata` column — one JSON blob per row/chunk.
+
+*Why it's useful*
+
+1. **Flexible schema** — new metadata fields (source, page, author, date, etc.) can be added without altering the table schema, since it's just JSON.
+2. **Citations/traceability** — in `app/rag.py`'s `answer_with_docs_async()`, each retrieved document's `d.metadata.get("source")` is read to build the `sources` list returned to the user, so they can see which file(s) an answer came from. This value comes straight out of the `langchain_metadata` JSON blob.
+3. **Filtered search support** — `metadata_columns=["category"]` in `utils.py` promotes the `category` key specifically out of the JSON blob into its own indexed `category` SQL column (separate from `langchain_metadata`), enabling fast `WHERE category = 'guides'` filtering during vector search (see `_build_chain()`'s `search_kwargs["filter"] = {"category": category}`).
+
+**Summary:** `langchain_metadata` is the general-purpose JSON "extra info" bucket for each embedded chunk (source file, page, etc.), while frequently-filtered fields like `category` are additionally promoted to their own real column for efficient querying — both are populated automatically by LangChain's vector store during ingestion.
+
 === `seed/qna_test.json`
 
 A JSONL file with two test Q&A pairs for evaluation:
@@ -944,6 +1388,7 @@ So *`pgvector` is the vector database* that makes semantic search possible — w
 
 Use these commands to verify each component:
 
+// macOS / Linux
 [source,bash]
 ----
 # Verify PostgreSQL
@@ -959,10 +1404,29 @@ curl http://localhost:8000/health
 curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/
 ----
 
+// Windows (PowerShell)
+[source,powershell]
+----
+# Verify PostgreSQL
+pg_isready
+
+# Verify Redis
+redis-cli ping
+
+# Verify the app
+curl.exe http://localhost:8000/health
+# or: Invoke-RestMethod -Uri http://localhost:8000/health
+
+# Check if the app is serving
+curl.exe -s -o NUL -w "%{http_code}" http://localhost:8000/
+# or: (Invoke-WebRequest -Uri http://localhost:8000/).StatusCode
+----
+
 === Stopping the Application
 
 To stop everything:
 
+// macOS (Homebrew)
 [source,bash]
 ----
 # Stop the FastAPI server — press Ctrl+C in the terminal where it's running
@@ -981,10 +1445,26 @@ docker run -d --name cka-redis -p 6379:6379 -p 8001:8001 redis/redis-stack:lates
 deactivate
 ----
 
+// Windows (PowerShell)
+[source,powershell]
+----
+# Stop the FastAPI server — press Ctrl+C in the terminal where it's running
+
+# Stop PostgreSQL (if you want to free resources)
+Stop-Service postgresql-x64-16
+
+# Stop Redis (if running via Docker)
+docker stop redis
+
+# Deactivate the virtual environment
+deactivate
+----
+
 === Restarting After Stopping
 
 When you want to run the project again later:
 
+// macOS (Homebrew)
 [source,bash]
 ----
 # Start services
@@ -999,7 +1479,22 @@ source venv_cka/bin/activate
 uvicorn app.api:app --host 0.0.0.0 --port 8000 --reload
 ----
 
-*Note:* The data in PostgreSQL and Redis persists across restarts if you used `brew services`. You don't need to re-ingest documents unless you clear the database.
+// Windows (PowerShell)
+[source,powershell]
+----
+# Start services
+Start-Service postgresql-x64-16
+docker start redis
+
+# Activate environment
+cd Frontier-Engineer\week2\e2e-projects\rag-knowledge-management
+venv_cka\Scripts\Activate.ps1
+
+# Run the app
+uvicorn app.api:app --host 0.0.0.0 --port 8000 --reload
+----
+
+*Note:* The data in PostgreSQL and Redis persists across restarts if you used `brew services` (macOS) or the equivalent Windows service/Docker container. You don't need to re-ingest documents unless you clear the database.
 
 == Troubleshooting
 
@@ -1007,6 +1502,7 @@ uvicorn app.api:app --host 0.0.0.0 --port 8000 --reload
 
 Install the missing package:
 
+// Same on macOS, Linux and Windows (inside the activated venv)
 [source,bash]
 ----
 pip install langchain-classic
@@ -1014,6 +1510,7 @@ pip install langchain-classic
 
 === ModuleNotFoundError: No module named 'langchain_postgres'
 
+// Same on macOS, Linux and Windows (inside the activated venv)
 [source,bash]
 ----
 pip install langchain-postgres
@@ -1023,6 +1520,7 @@ pip install langchain-postgres
 
 Ensure PostgreSQL is running:
 
+// macOS (Homebrew)
 [source,bash]
 ----
 brew services list | grep postgresql
@@ -1031,8 +1529,18 @@ pg_isready
 
 If not running: `brew services start postgresql@17`
 
+// Windows (PowerShell)
+[source,powershell]
+----
+Get-Service postgresql*
+pg_isready
+----
+
+If not running: `Start-Service postgresql-x64-16`
+
 === Connection refused to Redis
 
+// macOS (Homebrew)
 [source,bash]
 ----
 brew services list | grep redis
@@ -1041,10 +1549,20 @@ redis-cli ping
 
 If not running: `brew services start redis`
 
+// Windows (PowerShell) — assuming Redis is run via Docker
+[source,powershell]
+----
+docker ps --filter "name=redis"
+redis-cli ping
+----
+
+If not running: `docker start redis` (or `docker run -d --name redis -p 6379:6379 redis:latest` if the container doesn't exist yet)
+
 === Ingestion fails with authentication error
 
 Your PostgreSQL user might need a password or the correct permissions. Try:
 
+// macOS / Linux / Windows — psql syntax is identical
 [source,bash]
 ----
 # Set a password for postgres user
@@ -1056,13 +1574,22 @@ psql -d postgres -c "ALTER USER postgres PASSWORD 'postgres';"
 
 Or if your macOS user is the PostgreSQL superuser:
 
+// macOS / Linux
 [source,bash]
 ----
 # Use trust authentication — update .env to:
 DATABASE_URL=postgresql+asyncpg://YOUR_USERNAME@localhost:5432/postgres
 ----
 
-Where `YOUR_USERNAME` is the output of `whoami`.
+// Windows (PowerShell) — use your Windows username instead
+[source,powershell]
+----
+# Update .env to:
+DATABASE_URL=postgresql+asyncpg://YOUR_USERNAME@localhost:5432/postgres
+----
+
+Where `YOUR_USERNAME` is the output of `whoami` (macOS/Linux) or `$env:USERNAME` / `whoami` (Windows PowerShell).
+
 
 == Summary of Services and Ports
 
