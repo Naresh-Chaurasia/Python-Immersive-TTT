@@ -8,9 +8,6 @@ from autogen_agentchat.ui import Console
 from autogen_ext.models.openai import OpenAIChatCompletionClient
 from autogen_ext.tools.mcp import StdioServerParams, McpWorkbench
 
-os.environ[
-    "OPENAI_API_KEY"] = "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"
-
 
 async def main():
     filesystem_server_params = StdioServerParams( command="npx",
