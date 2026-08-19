@@ -78,7 +78,7 @@ The table below maps concrete gaps observed in the code to the enterprise requir
 | Postgres data directory and Redis AOF persisted to local Docker named volumes (`pgdata`, `redis-data`) with no volume-level encryption.
 | No KMS-backed encryption at rest for vectors, document metadata, or cached responses (which may contain sensitive answer text).
 
-| Network exposure
+| #Network exposure#
 | `docker-compose.yml` publishes Postgres (5432), Redis (6379/8001), and the app (8000) directly on host ports with no network segmentation.
 | Database and cache should never be reachable from outside a private subnet; no WAF, no ALB, no security-group-based segmentation.
 
@@ -94,11 +94,11 @@ The table below maps concrete gaps observed in the code to the enterprise requir
 | `/ask` category filtering exists in code (`app/rag.py`, `_build_chain(category)`) but `app/api.py` hard-codes `category = None` (no filter applied) — meaning **any user can retrieve content from any category**, including HR/handbook/policy documents.
 | No mapping between user identity/role and the categories/documents they are authorized to query. This is a direct data-governance and least-privilege gap.
 
-| High availability
+| #High availability# - Design Only
 | Single Postgres container, single Redis container, single app container (or `--reload` dev server). No replicas, no failover.
 | No RTO/RPO guarantees; a single container/node failure causes full outage and, without backups, potential permanent data loss of the vector index.
 
-| Backup & DR
+| #Backup & DR# - Design Only
 | No automated backup strategy for the `langchain_pg_embedding` table or ingested source documents beyond what's on local disk (`data/`).
 | No cross-region backup, no point-in-time recovery, no tested restore procedure.
 
@@ -118,7 +118,7 @@ The table below maps concrete gaps observed in the code to the enterprise requir
 | No pipeline definitions found in the project; deployment is manual (`docker compose up --build` or local `uvicorn`).
 | No automated testing, image scanning, or promotion gates between dev/staging/prod.
 
-| Data residency / retention
+| #Data residency / retention# - Only Design
 | No documented retention policy for ingested documents, vector embeddings, logs, or cached answers.
 | Regulatory frameworks (GDPR, internal records-retention policy) require explicit retention and deletion (“right to erasure”) capability.
 |===

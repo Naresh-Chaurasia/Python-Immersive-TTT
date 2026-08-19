@@ -60,6 +60,49 @@ When running locally without Docker, your system runs these processes:
 
 ##############################################
 
+=== The Complete End-to-End Picture
+
+[ditaa]
+....
+                              INGESTION (runs once per invoice)
+ +------------+    +------------+    +------------+    +------------+
+ |            |    |            |    |            |    |            |
+ | Sample     |--->| Text       |--->| Chunking   |--->| Embedding  |
+ | Docs       |    | Extraction |    |            |    | Model      |
+ |            |    |            |    |            |    |            |
+ +------------+    +------------+    +------------+    +-----+------+
+                                                              |
+                                                              v
+                                                       +------+------+
+                                                       |             |
+                                                       |  Vector     |
+                                                       |  Database   |
+                                                       |             |
+                                                       +------+------+
+                                                              |
+                              QUERY (runs per request)        |
+ +------------+    +------------+    +------------+           |
+ |            |    |            |    |            |           |
+ | User       |--->| Embedding  |--->| Similarity |<----------+
+ | Question   |    | Model      |    | Search     |
+ |            |    |            |    |            |
+ +------------+    +------------+    +-----+------+
+                                           |
+                                           | top-K chunks
+                                           v
+                                    +------+------+    +------------+    +------------+
+                                    |             |    |            |    |            |
+                                    |  Prompt     |--->|   LLM      |--->|  Output    |
+                                    |  Builder    |    |            |    |            |
+                                    |             |    |            |    |            |
+                                    +-------------+    +------------+    +------------+
+....
+
+
+##############################################
+
+---
+
 == Step-by-Step Setup
 
 === Python Virtual Environment
